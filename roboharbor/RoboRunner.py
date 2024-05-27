@@ -3,15 +3,20 @@ import os
 from robo_pier_lib.ProcessCallback import ProcessCallback
 from robo_pier_lib.roboharbor.RoboHarborClientSocket import RoboHarborClientSocket, IRoboHarborClientSocketCallback
 import subprocess
+import logging
 import sys
+import glob, os.path
 
 
 class RoboRunner(IRoboHarborClientSocketCallback):
     _client : RoboHarborClientSocket = None
+    _app_directory: str = "app"
+
     def __init__(self, client, process_c, only_test_checkout=False):
         self._client = client
         self._only_test_checkout = only_test_checkout
         self._process_cb = process_c
+        self._app_directory = "app"
         self._client.registerCallback(self)
 
     def runTheProcess(self):
@@ -37,13 +42,15 @@ class RoboRunner(IRoboHarborClientSocketCallback):
             raise Exception("branch not found in source")
         url = source['url']
         branch = source['branch']
-        ret = subprocess.run(f"rm -rf app", shell=True, check=True)
-        ret = subprocess.run(f"mkdir app", shell=True, check=True)
+        self.removeAppFiles()
+        ret = subprocess.run(f"mkdir "+self._app_directory, shell=True, check=True)
         # checkout
-        ret = subprocess.run(f"git clone --branch {branch} {url} app", shell=True, check=True,
+        ret = subprocess.run(f"git clone --branch {branch} {url} "+self._app_directory, shell=True, check=True,
                              stdout=subprocess.DEVNULL,
                              stderr=subprocess.STDOUT
                              )
+        if ret.returncode == 0:
+            print(f"git clone --branch {branch} {url} app was successful")
 
     def fetchSource(self):
         print("fetchSource")
@@ -59,13 +66,29 @@ class RoboRunner(IRoboHarborClientSocketCallback):
         else:
             raise Exception("unknown source type")
 
+    def removeAppFiles(self):
+        # remove the app directory
+        try:
+            ret = subprocess.run("rm -rf " + self._app_directory, shell=True, check=True)
+        except Exception as e:
+            pass
 
+    def getAppFiles(self):
+        # get all the files in the app directory
+        try:
+            files = os.listdir(self._app_directory)
+            return files
+        except Exception as e:
+            return []
 
     def validate_robot(self, robot):
-        print("validate_robot")
+        logging.debug("validate_robot", robot)
         self.robot = robot
         try:
             self.fetchSource()
+            files = self.getAppFiles()
+            self.removeAppFiles()
+            return files
         except Exception as e:
             raise e
 

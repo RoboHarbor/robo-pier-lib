@@ -92,8 +92,8 @@ class RoboHarborClientSocket(WebsocketThread):
     def _validate_robot(self, msg):
         self.robot = msg['robot']
         try:
-            self._callback.validate_robot(self.robot)
-            self.answer(msg['responseId'], {'success': True})
+            files = self._callback.validate_robot(self.robot)
+            self.answer(msg['responseId'], {'success': True, 'files': files})
         except Exception as e:
             self.answer(msg['responseId'], {'success': False, 'error': str(e)})
             return

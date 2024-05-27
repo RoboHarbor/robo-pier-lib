@@ -37,14 +37,14 @@ def startRobot(process_cb):
                                     os.environ['ROBO_ID'],
                                     os.environ['POD_NAME'],
                                     only_test_checkout=only_test_checkout)
-    thread = Thread(target=client.run)
-    thread.start()
 
-    time.sleep(1)
 
     # start the robo
     robo = RoboRunner(client, process_cb,
                       only_test_checkout=only_test_checkout)
+    time.sleep(1)
+
 
     # run the robo
+    client.run()
     return robo

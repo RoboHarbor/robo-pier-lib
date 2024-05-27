@@ -1,8 +1,10 @@
 import asyncio
+import logging
 import queue
 import ssl
 import sys
 import threading
+import time
 from abc import abstractmethod, ABC
 from typing import Dict
 
@@ -116,30 +118,67 @@ class WebsocketThread(ABC, threading.Thread):
         """
         self.outgoing.put(message)
 
+    def close_tasks(self, task1, task2):
+        try:
+            task1.cancel()
+        except Exception as e:
+            pass
+        try:
+            task2.cancel()
+        except Exception as e:
+            pass
+
     async def listen(self):
-        """ Listen to the websocket and local outgoing queue """
-        async with websockets.connect(self.url,
-                                      extra_headers=self.headers) as socket:
-            task1 = self.listen_socket(socket)
-            task2 = self.listen_queue(socket)
-            await asyncio.gather(task1, task2)
+        while self.killed is False:
+            try:
+                """ Listen to the websocket and local outgoing queue """
+                async with websockets.connect(self.url,
+                                              extra_headers=self.headers) as socket:
+                    try:
+                        task1 = self.listen_socket(socket)
+                        task2 = self.listen_queue(socket)
+                        self.disconnected = False
+                        await asyncio.gather(task1, task2)
+                    except websockets.ConnectionClosedError as e:
+                        self.disconnected = True
+                        logging.info('Websocket Connection closed - restart', e)
+                        self.close_tasks(task1, task2)
+                        await asyncio.sleep(2)
+                        continue
+                    except Exception as e:
+                        self.disconnected = True
+                        self.close_tasks(task1, task2)
+                        logging.error('Websocket error: %s', e)
+                        await asyncio.sleep(3)
+                        continue
+            except Exception as e:
+                logging.error('Websocket connection error: %s', e)
+                await asyncio.sleep(3)
 
     async def listen_socket(self, socket):
-        """ Listen for messages on the socket, schedule tasks to handle """
-        async for msg in socket:
-            asyncio.create_task(self.handle_message(msg))
+        try:
+            """ Listen for messages on the socket, schedule tasks to handle """
+            async for msg in socket:
+                asyncio.create_task(self.handle_message(msg))
+        except Exception as e:
+            logging.error('Error in listen_socket: %s', e)
+            raise e
 
     async def listen_queue(self, socket):
-        """ Poll the outgoing queue for messages, send them to websocket """
-        while True:
-            if self.outgoing.empty():
-                await asyncio.sleep(0.5)
-            else:
-                try:
-                    msg = self.outgoing.get(block=False)
-                    asyncio.create_task(socket.send(msg))
-                except queue.Empty:
-                    continue
+        try:
+            """ Poll the outgoing queue for messages, send them to websocket """
+            while not self.disconnected:
+                if self.outgoing.empty():
+                    await asyncio.sleep(0.2)
+                else:
+                    try:
+                        msg = self.outgoing.get(block=False)
+                        asyncio.create_task(socket.send(msg))
+                    except queue.Empty:
+                        continue
+        except Exception as e:
+            logging.error('Error in listen_queue: %s', e)
+            raise e
 
     def ignore_aiohttp_ssl_error(self):
         """ Ignore aiohttp #3535 / cpython #13548 issue with SSL close. """

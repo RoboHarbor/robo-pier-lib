@@ -1,4 +1,5 @@
 import os
+import time
 
 from robo_pier_lib.ProcessCallback import ProcessCallback
 from robo_pier_lib.roboharbor.RoboHarborClientSocket import RoboHarborClientSocket, IRoboHarborClientSocketCallback
@@ -43,11 +44,43 @@ class RoboRunner(IRoboHarborClientSocketCallback):
         url = source['url']
         branch = source['branch']
         self.removeAppFiles()
-        ret = subprocess.run(f"mkdir "+self._app_directory, shell=True, check=True)
-        # checkout
-        ret = subprocess.run(f"git clone --branch {branch} {url} "+self._app_directory, shell=True, check=True,
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.STDOUT
+        subprocess.run(f"mkdir "+self._app_directory, shell=True, check=True)
+
+        ret = None
+        # check if there is a ssh key set
+        if "credentials" in source:
+            credentials = source["credentials"]
+            if "sshKey" in credentials:
+                ssh = credentials["sshKey"]
+                if len(ssh) > 30:
+                    try:
+                        random_ssh_key_file = "/tmp/ssh_key"+str(time.time())
+                        # write with utf8 encoding
+                        with open(random_ssh_key_file, "w", encoding="utf-8") as f:
+                            f.write(ssh)
+                        subprocess.run(f"chmod 600 "+random_ssh_key_file, shell=True, check=True)
+                        # checkout with GIT_SSH_COMMAND=\"ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no\"
+
+                        ret = subprocess.run(f"ssh-agent bash -c 'ssh-add "+random_ssh_key_file+"; GIT_SSH_COMMAND=\"ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no\" "
+                                                                                                "git clone --branch " + branch + " "
+                                                                                                + url + " "
+                                                                                                "" + self._app_directory + "'",
+                                             shell=True, check=True,
+                                             stdout=subprocess.DEVNULL,
+                                             stderr=subprocess.STDOUT
+                                             )
+
+                    except Exception as e:
+                        raise e
+                    finally:
+                        os.remove(random_ssh_key_file)
+
+
+        if ret is None:
+            # checkout
+            ret = subprocess.run(f"git clone --branch {branch} {url} "+self._app_directory, shell=True, check=True,
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.STDOUT
                              )
         if ret.returncode == 0:
             print(f"git clone --branch {branch} {url} app was successful")
@@ -82,15 +115,15 @@ class RoboRunner(IRoboHarborClientSocketCallback):
             return []
 
     def validate_robot(self, robot):
-        logging.debug("validate_robot", robot)
         self.robot = robot
         try:
             self.fetchSource()
             files = self.getAppFiles()
-            self.removeAppFiles()
             return files
         except Exception as e:
             raise e
+        finally:
+            self.removeAppFiles()
 
 
 

@@ -1,5 +1,6 @@
 import os
 import time
+import json
 
 from robo_pier_lib.ProcessCallback import ProcessCallback
 from robo_pier_lib.roboharbor.RoboHarborClientSocket import RoboHarborClientSocket, IRoboHarborClientSocketCallback
@@ -20,16 +21,28 @@ class RoboRunner(IRoboHarborClientSocketCallback):
         self._app_directory = "app"
         self._client.registerCallback(self)
 
-    def runTheProcess(self):
+    async def runTheProcess(self):
         d = self._process_cb(self)
-        d.run()
+        await d.run()
         return d
 
-    def on_registered(self, robot):
+    async def on_registered(self, robot):
         print("on_registered", robot)
         self.robot = robot
         if not self._only_test_checkout:
-            self.runTheProcess()
+            try:
+                # lets checkout the source
+                try:
+                    self.fetchSource()
+                except Exception as e:
+                    raise e
+
+                # run the process
+                await self.runTheProcess()
+            except Exception as global_exception:
+                print("Error: ", str(global_exception))
+                sys.exit(1)
+            sys.exit(0)
 
 
     def on_robot_changed(self, robot):
@@ -65,9 +78,7 @@ class RoboRunner(IRoboHarborClientSocketCallback):
                                                                                                 "git clone --branch " + branch + " "
                                                                                                 + url + " "
                                                                                                 "" + self._app_directory + "'",
-                                             shell=True, check=True,
-                                             stdout=subprocess.DEVNULL,
-                                             stderr=subprocess.STDOUT
+                                             shell=True, check=True
                                              )
 
                     except Exception as e:
@@ -106,6 +117,20 @@ class RoboRunner(IRoboHarborClientSocketCallback):
         except Exception as e:
             pass
 
+    def getRobotFileContent(self):
+        try:
+            # check if the file ".robot" exists and return its content
+            files = glob.glob(self._app_directory + "/.robot")
+            if len(files) == 0:
+                return None
+            with open(files[0], "r") as f:
+                return json.loads(f.read())
+
+        except Exception as e:
+            raise e
+
+        return None
+
     def getAppFiles(self):
         # get all the files in the app directory
         try:
@@ -117,15 +142,47 @@ class RoboRunner(IRoboHarborClientSocketCallback):
     def validate_robot(self, robot):
         self.robot = robot
         try:
+            data = {}
             self.fetchSource()
             files = self.getAppFiles()
-            return files
+            data['files'] = files
+            robotContent = None
+            try:
+                robotContent = self.getRobotFileContent()
+            except Exception as e:
+                data['robotError'] = str(e)
+
+            data['robotContent'] = robotContent
+            return data
         except Exception as e:
             raise e
         finally:
             self.removeAppFiles()
 
+    #############################
+    # IRoboHarborClientSocketCallback
+    #############################
 
+    def get_config_value(self, v):
+        if self.robot is None:
+            return None
+        if 'image' not in self.robot:
+            return None
+        if 'config' not in self.robot['image']:
+            return None
+        if 'attributes' not in self.robot['image']['config']:
+            return None
+        if v not in self.robot['image']['config']['attributes']:
+            return None
+
+
+        if v not in self.robot['image']['config']['attributes']:
+            return None
+
+        return self.robot['image']['config']['attributes'][v]
+
+    def get_app_dir(self):
+        return self._app_directory
 
 
 

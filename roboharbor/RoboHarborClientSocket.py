@@ -9,7 +9,7 @@ from robo_pier_lib.roboharbor.WebsocketThread import WebsocketThread
 
 class IRoboHarborClientSocketCallback:
     @abstractmethod
-    def on_registered(self, robot):
+    async def on_registered(self, robot):
         pass
 
     @abstractmethod
@@ -69,9 +69,10 @@ class RoboHarborClientSocket(WebsocketThread):
 
     async def sendMessageAndAwaitResponse(self, message_type, message):
         response_id = self.random_response_id()
-        msg = {'type': message_type, 'responseId': response_id, 'message': message}
-        self.send(json.dumps(msg))
-        self._received_messages.append(msg)
+        message['responseId'] = response_id
+        message["type"] = message_type
+        self.send(json.dumps(message))
+        self._received_messages.append(message)
         resp = await self._wait_till_response(response_id)
         if 'error' in resp:
             raise Exception(resp['error'])
@@ -82,8 +83,11 @@ class RoboHarborClientSocket(WebsocketThread):
         try:
             # get all robot details
             if not self._only_test_checkout:
-                self.robot = await self.sendMessageAndAwaitResponse("getRobotDetails", {"roboId": self._robo_id})
-                self._callback.on_registered(self.robot)
+                message = await self.sendMessageAndAwaitResponse("getRobotDetails", {"roboId": self._robo_id, "robotSecret": self._secret})
+                if message is None or 'robot' not in message:
+                    raise Exception("Robot not found")
+                self.robot = message['robot']
+                await self._callback.on_registered(self.robot)
 
         except Exception as e:
             print(e)
@@ -92,8 +96,9 @@ class RoboHarborClientSocket(WebsocketThread):
     def _validate_robot(self, msg):
         self.robot = msg['robot']
         try:
-            files = self._callback.validate_robot(self.robot)
-            self.answer(msg['responseId'], {'success': True, 'files': files})
+            data = self._callback.validate_robot(self.robot)
+            data['success'] = True
+            self.answer(msg['responseId'], data)
         except Exception as e:
             self.answer(msg['responseId'], {'success': False, 'error': str(e)})
             return

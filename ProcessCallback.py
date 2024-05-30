@@ -7,9 +7,11 @@ class ProcessCallback(ABC):
 
    # here is the run method that will be called by the robo
     @abstractmethod
-    def run(self):
+    async def run(self):
         pass
 
     def get_config_value(self, v):
-        return None
+        return self._runner.get_config_value(v)
 
+    def get_app_dir(self):
+        return self._runner.get_app_dir()

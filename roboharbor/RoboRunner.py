@@ -134,7 +134,7 @@ class RoboRunner(IRoboHarborClientSocketCallback):
                 return None
             with open(files[0], "r") as f:
                 j = f.read()
-                return orjson.loads(j)
+                return j
 
         except Exception as e:
             raise e

@@ -1,7 +1,7 @@
 import os
 import time
 import json
-
+import orjson
 from robo_pier_lib.ProcessCallback import ProcessCallback
 from robo_pier_lib.roboharbor.RoboHarborClientSocket import RoboHarborClientSocket, IRoboHarborClientSocketCallback
 import subprocess
@@ -22,12 +22,21 @@ class RoboRunner(IRoboHarborClientSocketCallback):
         self._client.registerCallback(self)
 
     async def runTheProcess(self):
+
+        await self.sendRobotStartInfo()
+
         d = self._process_cb(self)
         await d.run()
         return d
 
+    async def sendRobotStartInfo(self):
+        await self._client.sendMessageWithoutResponse("robotStartInfo", {
+            "gitCommit": self.getLocalGitCommit(),
+            "robotContent": self.getRobotFileContent(),
+            "gitRemoteCommit": self.getRemoteGitCommit(self.robot),
+        })
+
     async def on_registered(self, robot):
-        print("on_registered", robot)
         self.robot = robot
         if not self._only_test_checkout:
             try:
@@ -124,7 +133,8 @@ class RoboRunner(IRoboHarborClientSocketCallback):
             if len(files) == 0:
                 return None
             with open(files[0], "r") as f:
-                return json.loads(f.read())
+                j = f.read()
+                return orjson.loads(j)
 
         except Exception as e:
             raise e
@@ -139,6 +149,25 @@ class RoboRunner(IRoboHarborClientSocketCallback):
         except Exception as e:
             return []
 
+    def getRemoteGitCommit(self, robot):
+        git_commit_remote = None
+        try:
+            # get the remote newest git commit
+            ret = subprocess.run(
+                "cd " + self._app_directory + " && git ls-remote origin -h refs/heads/" + robot["source"]["branch"],
+                shell=True, check=True, stdout=subprocess.PIPE)
+            git_commit_remote = ret.stdout.decode('utf-8').split("\t")[0].replace("\n", "").replace("\r", "").replace("\t", "")
+        except Exception as e:
+            logging.error("Error in getting remote git commit: %s", e)
+        return git_commit_remote
+
+    def getLocalGitCommit(self):
+        try:
+            ret = subprocess.run("cd "+self._app_directory+" && git rev-parse HEAD", shell=True, check=True, stdout=subprocess.PIPE)
+            return ret.stdout.decode('utf-8').replace("\n", "").replace("\r", "").replace("\t", "")
+        except Exception as e:
+            return None
+
     def validate_robot(self, robot):
         self.robot = robot
         try:
@@ -150,9 +179,14 @@ class RoboRunner(IRoboHarborClientSocketCallback):
             try:
                 robotContent = self.getRobotFileContent()
             except Exception as e:
-                data['robotError'] = str(e)
+                data['robotContentError'] = str(e)
 
             data['robotContent'] = robotContent
+            data['git_commit'] = self.getLocalGitCommit()
+            # get the remote git commit
+            data['git_commit_remote'] = self.getRemoteGitCommit(robot)
+
+
             return data
         except Exception as e:
             raise e

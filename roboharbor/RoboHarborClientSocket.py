@@ -67,6 +67,16 @@ class RoboHarborClientSocket(WebsocketThread):
             await asyncio.sleep(0.5)
         return self._message_received(response_id)
 
+    async def sendMessageWithoutResponse(self, message_type, message):
+        response_id = self.random_response_id()
+        message['responseId'] = response_id
+        message['robotId'] = self._robo_id
+        message['podId'] = self._pod_name
+        message["type"] = message_type
+        self.send(json.dumps(message))
+        return message
+
+
     async def sendMessageAndAwaitResponse(self, message_type, message):
         response_id = self.random_response_id()
         message['responseId'] = response_id

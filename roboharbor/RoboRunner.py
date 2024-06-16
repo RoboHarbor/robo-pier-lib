@@ -20,6 +20,7 @@ class RoboRunner(IRoboHarborClientSocketCallback):
         self._process_cb = process_c
         self._app_directory = "app"
         self._client.registerCallback(self)
+        self.logger = logging.getLogger(__name__)
 
     async def runTheProcess(self):
 
@@ -27,7 +28,33 @@ class RoboRunner(IRoboHarborClientSocketCallback):
 
         d = self._process_cb(self)
         await d.run()
+
+
+        await self.sendRobotFinishedInfo()
         return d
+
+    async def sendRobotFinishedInfo(self):
+        await self._client.sendMessageWithoutResponse("robotFinishedInfo", {
+            "gitCommit": self.getLocalGitCommit(),
+            "robotContent": self.getRobotFileContent(),
+            "gitRemoteCommit": self.getRemoteGitCommit(self.robot),
+        })
+
+    def sendRobotContentUpdate(self, content):
+        self._client.sendMessageWithoutResponse("robotContentUpdate", {
+            "content": content
+        })
+
+    def sendRobotLog(self, type, message, status, error=None):
+        robotLogData = {
+            "type": "robotLog",
+            "logType": type,  # "preShell", "process", "postShell
+            "message": message,
+            "status": status
+        }
+        if error is not None:
+            robotLogData['error'] = str(error)
+        self._client.sendMessageWithoutResponse("robotLog", robotLogData)
 
     async def sendRobotStartInfo(self):
         await self._client.sendMessageWithoutResponse("robotStartInfo", {
@@ -45,6 +72,54 @@ class RoboRunner(IRoboHarborClientSocketCallback):
                     self.fetchSource()
                 except Exception as e:
                     raise e
+
+                robotContent = None
+                try:
+                    robotContent = self.getRobotFileContent()
+                except Exception as e:
+                    self.sendRobotLog("robotContentParseError", "", "error", e)
+
+                if robotContent is not None:
+                    self.sendRobotContentUpdate(robotContent)
+                    try:
+                        self.robotContentData = orjson.loads(robotContent)
+                    except Exception as e:
+                        self.sendRobotLog("robotContentParseError", "", "error", e)
+                        self.logger.error("Error in parsing robot content: %s", e)
+                        self.robotContentData = None
+                else:
+                    self.robotContentData = None
+
+
+                # run the preShell commands
+                if 'preRunShellScript' in robot and robot["preRunShellScript"] is not None and len(robot["preRunShellScript"]) > 1:
+                    try:
+                        c = robot["preRunShellScript"]
+                        subprocess.run(c, shell=True, check=True)
+                        self.sendRobotLog("preRunShellScript", c, "success")
+                    except Exception as e:
+                        self.sendRobotLog("preRunShellScript", c, "error", e)
+                        raise e
+
+                if self.robotContentData is not None and "process" in self.robotContentData and "preRunShellScript" in self.robotContentData["process"] \
+                        and self.robotContentData["process"]["preRunShellScript"] is not None and len(self.robotContentData["process"]["preRunShellScript"]) > 1:
+                    try:
+                        c = self.robotContentData["process"]["preRunShellScript"]
+                        subprocess.run(c, shell=True, check=True)
+                        self.sendRobotLog("preRunShellScript", c, "success")
+                    except Exception as e:
+                        self.sendRobotLog("preRunShellScript", c, "error", e)
+                        raise e
+
+
+                if 'openvpn' in robot:
+                    if robot['openvpn']["enabled"] == True:
+                        try:
+                            subprocess.run("/opt/change_vpn.sh "+robot["openvpn"]["username"]+" "+robot["openvpn"]["password"]+" "+robot["openvpn"]["country"], shell=True, check=True)
+                            self.sendRobotLog("openvpn", "openvpn started", "success")
+                        except Exception as e:
+                            self.sendRobotLog("openvpn", "openvpn error", "error", e)
+                            raise e
 
                 # run the process
                 await self.runTheProcess()
@@ -198,22 +273,14 @@ class RoboRunner(IRoboHarborClientSocketCallback):
     #############################
 
     def get_config_value(self, v):
-        if self.robot is None:
-            return None
-        if 'image' not in self.robot:
-            return None
-        if 'config' not in self.robot['image']:
-            return None
-        if 'attributes' not in self.robot['image']['config']:
-            return None
-        if v not in self.robot['image']['config']['attributes']:
-            return None
 
+        if self.robot is not None and 'image' in self.robot and 'config' in self.robot['image'] and 'attributes' in self.robot['image']['config']:
+            return self.robot['image']['config']['attributes'][v]
 
-        if v not in self.robot['image']['config']['attributes']:
-            return None
+        if self.robotContentData is not None and 'process' in self.robotContentData and 'properties' in self.robotContentData['process'] and v in self.robotContentData['process']['properties']:
+            return self.robotContentData['process']['properties'][v]
 
-        return self.robot['image']['config']['attributes'][v]
+        return None
 
     def get_app_dir(self):
         return self._app_directory
